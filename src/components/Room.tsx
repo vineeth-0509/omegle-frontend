@@ -536,8 +536,6 @@ export const Room = ({
 };
 
 */
-
-
 import { useEffect, useRef, useState } from "react";
 import { io, type Socket } from "socket.io-client";
 import { Button } from "@/components/ui/button";
@@ -570,6 +568,9 @@ export const Room = ({
   const [connectedUser, setConnectedUser] = useState<string | null>(null);
   const navigate = useNavigate();
 
+  // Use ref for pc to avoid stale closures
+  const pcRef = useRef<RTCPeerConnection | null>(null);
+
   const createPeerConnection = () => {
     const pc = new RTCPeerConnection({
       iceServers: [
@@ -600,7 +601,7 @@ export const Room = ({
     });
     console.log("created new peerConnection");
 
-    
+    // Add local tracks
     if (localAudioTrack) {
       try {
         pc.addTrack(localAudioTrack);
@@ -618,7 +619,7 @@ export const Room = ({
       }
     }
 
- 
+    // Handle remote tracks
     pc.ontrack = (event) => {
       console.log(
         "Received remote track:",
@@ -656,7 +657,7 @@ export const Room = ({
       }
     };
 
-    
+    // ICE candidate handling
     pc.onicecandidate = (event) => {
       if (event.candidate && roomIdRef.current && socket) {
         console.log("sending ice candidates", event.candidate.type);
@@ -670,7 +671,7 @@ export const Room = ({
       }
     };
 
-    
+    // Connection state monitoring
     pc.onconnectionstatechange = () => {
       console.log("connection state", pc.connectionState);
       if (pc.connectionState === "connected") {
@@ -697,9 +698,10 @@ export const Room = ({
   };
 
   const cleanupConnection = () => {
-    if (pc) {
-      pc.close();
+    if (pcRef.current) {
+      pcRef.current.close();
       console.log("PeerConnection closed");
+      pcRef.current = null;
       setPc(null);
     }
 
@@ -750,6 +752,7 @@ export const Room = ({
       setConnectedUser("stranger");
 
       const newPc = createPeerConnection();
+      pcRef.current = newPc; // Update ref immediately
       setPc(newPc);
       try {
         console.log("userA creating offer");
@@ -782,6 +785,7 @@ export const Room = ({
         setConnectedUser("stranger");
 
         const newPc = createPeerConnection();
+        pcRef.current = newPc; // Update ref immediately
         setPc(newPc);
         
         console.log("userB setting remote description");
@@ -805,9 +809,11 @@ export const Room = ({
 
     socket.on("answer", async ({ roomId, sdp: remoteSdp }) => {
       console.log("receiving answer for room: ", roomId);
-      if (pc) {
+      // Use the ref instead of state to avoid stale closure
+      const currentPc = pcRef.current;
+      if (currentPc) {
         try {
-          await pc.setRemoteDescription(new RTCSessionDescription(remoteSdp));
+          await currentPc.setRemoteDescription(new RTCSessionDescription(remoteSdp));
           console.log("Remote description set on pc");
         } catch (error) {
           console.error("Error setting remote description:", error);
@@ -821,8 +827,10 @@ export const Room = ({
       try {
         console.log("received icecandidate");
         const iceCandidate = new RTCIceCandidate(candidate);
-        if (pc) {
-          await pc.addIceCandidate(iceCandidate);
+        // Use the ref instead of state to avoid stale closure
+        const currentPc = pcRef.current;
+        if (currentPc) {
+          await currentPc.addIceCandidate(iceCandidate);
           console.log("ice candidate added to pc");
         }
       } catch (error) {
@@ -885,17 +893,17 @@ export const Room = ({
         lobby,
         connectedUser,
         roomId: roomIdRef.current,
-        pc: pc
+        pc: pcRef.current
           ? {
-              connectionState: pc.connectionState,
-              iceConnectionState: pc.iceConnectionState,
+              connectionState: pcRef.current.connectionState,
+              iceConnectionState: pcRef.current.iceConnectionState,
             }
           : "null",
       });
     };
     const interval = setInterval(logConnectionState, 5000);
     return () => clearInterval(interval);
-  }, [socket, lobby, connectedUser, pc]);
+  }, [socket, lobby, connectedUser]);
 
   useEffect(() => {
     if (localVideoRef.current && localMediaTrack) {
@@ -928,7 +936,7 @@ export const Room = ({
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-6">
-    
+      {/* Header */}
       <div className="flex justify-between items-center mb-8 max-w-7xl mx-auto">
         <h1 className="text-2xl font-bold bg-gradient-to-r from-purple-400 to-blue-400 bg-clip-text text-transparent">
           Vinetalk
@@ -949,9 +957,9 @@ export const Room = ({
         </div>
       </div>
 
-      
+      {/* Video Grid */}
       <div className="grid lg:grid-cols-2 gap-6 mb-6 max-w-7xl mx-auto">
-     
+        {/* Local Video */}
         <div className="rounded-2xl overflow-hidden border-2 border-purple-500/30 bg-black relative group">
           <video
             ref={localVideoRef}
@@ -964,7 +972,7 @@ export const Room = ({
           </div>
         </div>
 
-    
+        {/* Remote Video */}
         <div className="rounded-2xl overflow-hidden border-2 border-blue-500/30 bg-black relative group">
           <video
             ref={remoteVideoRef}
@@ -975,7 +983,7 @@ export const Room = ({
             {connectedUser ? "Stranger" : "Waiting..."}
           </div>
 
-         
+          {/* Waiting Indicator */}
           {lobby && (
             <div className="absolute inset-0 flex items-center justify-center bg-black/50 backdrop-blur-sm">
               <div className="text-center">
@@ -987,11 +995,11 @@ export const Room = ({
         </div>
       </div>
 
-   
+      {/* Controls & Chat */}
       <div className="max-w-7xl mx-auto">
         {!lobby && (
           <div className="grid lg:grid-cols-3 gap-6">
-           
+            {/* Skip Button */}
             <div className="flex gap-2">
               <Button
                 onClick={handleNext}
@@ -1022,7 +1030,7 @@ export const Room = ({
                 )}
               </div>
 
-           
+              {/* Message Input */}
               <div className="p-4 border-t border-purple-500/20 flex gap-2">
                 <Input
                   className="flex-1 bg-white/10 border-purple-500/20 text-white placeholder-gray-500 rounded-lg py-2 px-4 focus:border-purple-500/50 focus:ring-purple-500/20"
