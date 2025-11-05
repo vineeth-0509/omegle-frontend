@@ -876,7 +876,7 @@ import { Input } from "@/components/ui/input"
 import { Send, SkipForward, LogOut } from "lucide-react"
 import { useNavigate } from "react-router-dom"
 
-const URL = "http://localhost:3000"
+const URL = "https://omegle-webrtc-backend-1.onrender.com/"
 
 export const Room = ({
   name,
