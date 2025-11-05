@@ -1165,8 +1165,9 @@ export const Room = ({
     </div>
   );
 };
+*/
 
-*/import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { io, type Socket } from "socket.io-client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -1186,11 +1187,12 @@ export const Room = ({
 }) => {
   const [socket, setSocket] = useState<null | Socket>(null);
   const [lobby, setLobby] = useState(true);
-  const [sendingPc, setSendingPc] = useState<RTCPeerConnection | null>(null);
-  const [receivingPc, setReceivingPc] = useState<RTCPeerConnection | null>(null);
+  const [pc, setPc] = useState<RTCPeerConnection | null>(null);
   const roomIdRef = useRef<string | null>(null);
+  const pcRef = useRef<RTCPeerConnection | null>(null);
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
   const localVideoRef = useRef<HTMLVideoElement>(null);
+  const remoteStreamRef = useRef<MediaStream | null>(null);
   const [messages, setMessages] = useState<{ text: string; self: boolean }[]>([]);
   const [input, setInput] = useState("");
   const [connectedUser, setConnectedUser] = useState<string | null>(null);
@@ -1198,7 +1200,7 @@ export const Room = ({
 
   // Create a clean peer connection
   const createPeerConnection = () => {
-    const pc = new RTCPeerConnection({
+    const newPc = new RTCPeerConnection({
       iceServers: [
         { urls: "stun:stun.l.google.com:19302" },
         {
@@ -1209,23 +1211,39 @@ export const Room = ({
       ],
     });
 
-    console.log(`Created new peer connection`);
+    console.log(`✅ Created new peer connection`);
 
-    // Handle incoming tracks
-    pc.ontrack = (event) => {
-      console.log("🎥 REMOTE TRACK RECEIVED:", event.track.kind, event.streams);
-      if (remoteVideoRef.current && event.streams[0]) {
-        remoteVideoRef.current.srcObject = event.streams[0];
-        console.log("✅ Remote video stream attached to video element");
+    // Create a managed remote stream
+    remoteStreamRef.current = new MediaStream();
+
+    // Handle incoming tracks - MANUAL STREAM MANAGEMENT
+    newPc.ontrack = (event) => {
+      console.log("🎥 REMOTE TRACK RECEIVED:", event.track.kind, event.track.id);
+      
+      // Add track to our managed stream
+      if (remoteStreamRef.current) {
+        remoteStreamRef.current.addTrack(event.track);
+        console.log("✅ Added track to managed remote stream");
         
-        // Force play with error handling
-        remoteVideoRef.current.play().catch(error => {
-          console.error("❌ Failed to play remote video:", error);
-        });
+        // Set the stream to video element
+        if (remoteVideoRef.current) {
+          remoteVideoRef.current.srcObject = remoteStreamRef.current;
+          console.log("✅ Remote stream attached to video element");
+          
+          // Force play with error handling
+          remoteVideoRef.current.play().catch(error => {
+            console.error("❌ Failed to play remote video:", error);
+          });
+        }
       }
+
+      // Monitor track state
+      event.track.onmute = () => console.log("🔇 Track muted:", event.track.kind);
+      event.track.onunmute = () => console.log("🔊 Track unmuted:", event.track.kind);
+      event.track.onended = () => console.log("⏹️ Track ended:", event.track.kind);
     };
 
-    pc.onicecandidate = (event) => {
+    newPc.onicecandidate = (event) => {
       if (event.candidate && socket && roomIdRef.current) {
         console.log("📤 Sending ICE candidate");
         socket.emit("add-ice-candidate", {
@@ -1236,26 +1254,39 @@ export const Room = ({
       }
     };
 
-    pc.onconnectionstatechange = () => {
-      console.log(`🔄 PC state:`, pc.connectionState);
+    newPc.onconnectionstatechange = () => {
+      console.log(`🔄 PC connection state:`, newPc.connectionState);
+      if (newPc.connectionState === 'connected') {
+        console.log("🎉 Peer connection established!");
+      }
     };
 
-    pc.oniceconnectionstatechange = () => {
-      console.log(`🧊 ICE state:`, pc.iceConnectionState);
+    newPc.oniceconnectionstatechange = () => {
+      console.log(`🧊 ICE connection state:`, newPc.iceConnectionState);
     };
 
-    return pc;
+    newPc.onsignalingstatechange = () => {
+      console.log(`📡 Signaling state:`, newPc.signalingState);
+    };
+
+    return newPc;
   };
 
   const cleanupConnection = () => {
     console.log("🧹 Cleaning up connection");
-    sendingPc?.close();
-    receivingPc?.close();
-    setSendingPc(null);
-    setReceivingPc(null);
+    if (pcRef.current) {
+      pcRef.current.close();
+      pcRef.current = null;
+    }
+    setPc(null);
+    if (remoteStreamRef.current) {
+      remoteStreamRef.current.getTracks().forEach(track => track.stop());
+      remoteStreamRef.current = null;
+    }
     if (remoteVideoRef.current) {
       remoteVideoRef.current.srcObject = null;
     }
+    setConnectedUser(null);
   };
 
   const handleNext = () => {
@@ -1264,7 +1295,6 @@ export const Room = ({
     }
     cleanupConnection();
     setLobby(true);
-    setConnectedUser(null);
   };
 
   const handleLeave = () => {
@@ -1272,6 +1302,47 @@ export const Room = ({
     socket?.disconnect();
     navigate("/");
   };
+
+  // Debug monitoring
+  useEffect(() => {
+    const interval = setInterval(() => {
+      if (pcRef.current) {
+        const connectionState = pcRef.current.connectionState;
+        const iceState = pcRef.current.iceConnectionState;
+        
+        console.log("🔍 PC Status:", {
+          connectionState,
+          iceState
+        });
+        
+        // Check if we have remote tracks
+        const receivers = pcRef.current.getReceivers();
+        const videoReceiver = receivers.find(r => r.track && r.track.kind === 'video');
+        const audioReceiver = receivers.find(r => r.track && r.track.kind === 'audio');
+        
+        if (videoReceiver && videoReceiver.track) {
+          console.log("📹 Remote video track:", videoReceiver.track.readyState);
+        }
+        if (audioReceiver && audioReceiver.track) {
+          console.log("🎤 Remote audio track:", audioReceiver.track.readyState);
+        }
+        
+        // Check remote video element
+        if (remoteVideoRef.current) {
+          const video = remoteVideoRef.current;
+          console.log("🎬 Remote video element:", {
+            hasStream: !!video.srcObject,
+            paused: video.paused,
+            readyState: video.readyState,
+            videoWidth: video.videoWidth,
+            videoHeight: video.videoHeight
+          });
+        }
+      }
+    }, 3000);
+    
+    return () => clearInterval(interval);
+  }, []);
 
   useEffect(() => {
     if (!name) return;
@@ -1288,22 +1359,24 @@ export const Room = ({
       setLobby(false);
       setConnectedUser("stranger");
 
-      const pc = createPeerConnection();
-      setSendingPc(pc);
+      // Create and set PC immediately
+      const newPc = createPeerConnection();
+      pcRef.current = newPc;
+      setPc(newPc);
 
       // Add local tracks to the connection
       if (localAudioTrack) {
-        pc.addTrack(localAudioTrack);
+        newPc.addTrack(localAudioTrack);
         console.log("🎤 Added local audio track");
       }
       if (localMediaTrack) {
-        pc.addTrack(localMediaTrack);
+        newPc.addTrack(localMediaTrack);
         console.log("📹 Added local video track");
       }
 
       try {
-        const offer = await pc.createOffer();
-        await pc.setLocalDescription(offer);
+        const offer = await newPc.createOffer();
+        await newPc.setLocalDescription(offer);
         console.log("📤 UserA: Sending offer");
         sock.emit("offer", { 
           roomId, 
@@ -1322,23 +1395,25 @@ export const Room = ({
       setLobby(false);
       setConnectedUser("stranger");
 
-      const pc = createPeerConnection();
-      setReceivingPc(pc);
+      // Create and set PC immediately
+      const newPc = createPeerConnection();
+      pcRef.current = newPc;
+      setPc(newPc);
 
       // Add local tracks to the connection
       if (localAudioTrack) {
-        pc.addTrack(localAudioTrack);
-        console.log("🎤 Added local audio track to receiving PC");
+        newPc.addTrack(localAudioTrack);
+        console.log("🎤 Added local audio track");
       }
       if (localMediaTrack) {
-        pc.addTrack(localMediaTrack);
-        console.log("📹 Added local video track to receiving PC");
+        newPc.addTrack(localMediaTrack);
+        console.log("📹 Added local video track");
       }
 
       try {
-        await pc.setRemoteDescription(new RTCSessionDescription(sdp));
-        const answer = await pc.createAnswer();
-        await pc.setLocalDescription(answer);
+        await newPc.setRemoteDescription(new RTCSessionDescription(sdp));
+        const answer = await newPc.createAnswer();
+        await newPc.setLocalDescription(answer);
 
         console.log("📤 UserB: Sending answer");
         sock.emit("answer", { 
@@ -1354,15 +1429,26 @@ export const Room = ({
     // User A: Receives answer
     sock.on("answer", async ({ sdp }) => {
       console.log("📥 UserA: Received ANSWER");
-      if (sendingPc) {
+      
+      const currentPc = pcRef.current;
+      if (currentPc) {
         try {
-          await sendingPc.setRemoteDescription(new RTCSessionDescription(sdp));
+          await currentPc.setRemoteDescription(new RTCSessionDescription(sdp));
           console.log("✅ UserA: Remote description set from answer");
         } catch (error) {
           console.error("❌ Error setting remote description:", error);
         }
       } else {
-        console.error("❌ UserA: No sending PC for answer");
+        console.error("❌ UserA: No PC available for answer");
+        // Retry after a short delay
+        setTimeout(() => {
+          const retryPc = pcRef.current;
+          if (retryPc) {
+            retryPc.setRemoteDescription(new RTCSessionDescription(sdp))
+              .then(() => console.log("✅ UserA: Remote description set on retry"))
+              .catch(err => console.error("❌ Retry failed:", err));
+          }
+        }, 500);
       }
     });
 
@@ -1371,20 +1457,14 @@ export const Room = ({
       console.log("🧊 Processing ICE candidate");
       const ice = new RTCIceCandidate(candidate);
       
-      // Try both PCs since we don't know which one needs it
-      const promises = [];
-      if (sendingPc) {
-        promises.push(sendingPc.addIceCandidate(ice).catch(error => 
-          console.error("❌ Error adding ICE to sending PC:", error)
-        ));
+      const currentPc = pcRef.current;
+      if (currentPc) {
+        currentPc.addIceCandidate(ice).catch(error => 
+          console.error("❌ Error adding ICE candidate:", error)
+        );
+      } else {
+        console.warn("⚠️ No PC available for ICE candidate");
       }
-      if (receivingPc) {
-        promises.push(receivingPc.addIceCandidate(ice).catch(error =>
-          console.error("❌ Error adding ICE to receiving PC:", error)
-        ));
-      }
-      
-      await Promise.all(promises);
     });
 
     // Handle chat messages
@@ -1398,7 +1478,6 @@ export const Room = ({
       alert("Stranger disconnected");
       cleanupConnection();
       setLobby(true);
-      setConnectedUser(null);
     });
 
     sock.on("room-ready", ({ roomId }) => {
@@ -1506,6 +1585,32 @@ export const Room = ({
               >
                 <SkipForward className="w-5 h-5" />
                 Next
+              </Button>
+              
+              {/* Debug Button */}
+              <Button
+                onClick={() => {
+                  if (remoteVideoRef.current) {
+                    console.log("🔍 Remote video debug:", {
+                      srcObject: remoteVideoRef.current.srcObject,
+                      videoTracks: (remoteVideoRef.current.srcObject as MediaStream)?.getVideoTracks(),
+                      audioTracks: (remoteVideoRef.current.srcObject as MediaStream)?.getAudioTracks(),
+                      readyState: remoteVideoRef.current.readyState,
+                      videoWidth: remoteVideoRef.current.videoWidth,
+                      videoHeight: remoteVideoRef.current.videoHeight
+                    });
+                  }
+                  if (pcRef.current) {
+                    const receivers = pcRef.current.getReceivers();
+                    console.log("📡 PC receivers:", receivers.map(r => ({
+                      kind: r.track?.kind,
+                      readyState: r.track?.readyState
+                    })));
+                  }
+                }}
+                className="bg-blue-600 hover:bg-blue-700 text-white rounded-xl py-6 font-semibold"
+              >
+                Debug
               </Button>
             </div>
 
