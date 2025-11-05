@@ -34,14 +34,13 @@ export const Room = ({
   const navigate = useNavigate();
 
   const createPeerConnection = () => {
-    const pc = new RTCPeerConnection({
+   const pc = new RTCPeerConnection({
       iceServers: [
         { urls: "stun:stun.l.google.com:19302" },
         { urls: "stun:stun1.l.google.com:19302" },
         { urls: "stun:stun2.l.google.com:19302" },
         { urls: "stun:stun3.l.google.com:19302" },
         { urls: "stun:stun4.l.google.com:19302" },
-
         {
           urls: "turn:openrelay.metered.ca:80",
           username: "openrelayproject",
@@ -53,12 +52,14 @@ export const Room = ({
           credential: "openrelayproject",
         },
         {
-          urls: "turn:openrelay.metered.ca:443?transport=tcp", // FIXED: transport not transaport
+          urls: "turn:openrelay.metered.ca:443?transport=tcp",
           username: "openrelayproject",
           credential: "openrelayproject",
         },
       ],
       iceCandidatePoolSize: 10,
+      bundlePolicy: 'max-bundle',
+      rtcpMuxPolicy: 'require'
     });
     console.log("created new peerConnection");
 
@@ -88,39 +89,48 @@ export const Room = ({
     pc.ontrack = (event) => {
       console.log(
         "Received remote track:",
-        //    {
-        //   trackKind: event.track.kind,
-        //   trackId: event.track.id,
-        //   streamCount: event.streams.length,
-        //   stream: event.streams[0],
-        //   readyState: event.track.readyState,
-        // }
-        event.track.kind
+       { kind: event.track.kind,
+        id: event.track.id,
+        stream: event.streams[0],
+        trackReadyState: event.track.readyState
+      }
       );
+
       const remoteStream = event.streams[0];
-      if (remoteStream) {
+      if (remoteStream && remoteVideoRef.current) {
         console.log(
           "setting remote tracks",
           remoteStream.getTracks().map((t) => ({
             kind: t.kind,
             id: t.id,
-            enabled: t.enabled,
-            readyState: t.readyState,
           }))
         );
-        if (remoteVideoRef.current) {
-          remoteVideoRef.current.srcObject = remoteStream;
-          remoteVideoRef.current.onloadedmetadata = () => {
-            console.log("remote video metadata loaded");
-            remoteVideoRef.current?.play().catch((error) => {
-              console.error("error playing remote video", error);
-            });
-          };
+        // if (remoteVideoRef.current) {
+        //   remoteVideoRef.current.srcObject = remoteStream;
+        //   remoteVideoRef.current.onloadedmetadata = () => {
+        //     console.log("remote video metadata loaded");
+        //     remoteVideoRef.current?.play().catch((error) => {
+        //       console.error("error playing remote video", error);
+        //     });
+        //   };
 
-          remoteVideoRef.current.oncanplay = () => {
-            console.log("remote video can play");
-          };
-        }
+        //   remoteVideoRef.current.oncanplay = () => {
+        //     console.log("remote video can play");
+        //   };
+        // }
+        remoteVideoRef.current.srcObject = remoteStream;
+
+        const playVideo = () => {
+          if(remoteVideoRef.current){
+            remoteVideoRef.current.play().then(()=> {
+              console.log('remote video playing success')
+            }).catch(error => {
+              console.error("error playing remote video", error);
+              setTimeout(playVideo, 100);
+            })
+          }
+        };
+        playVideo();
       }
     };
 
@@ -143,12 +153,21 @@ export const Room = ({
         console.log("peer connection established");
       } else if (pc.connectionState === "failed") {
         console.error("peer connection failed");
+        setTimeout(() => {
+          if(pc.connectionState === 'failed'){
+            console.log('attempting to restart ice')
+          }
+        }, 2000)
       }
     };
 
     pc.oniceconnectionstatechange = () => {
       console.log("ice connection state", pc.iceConnectionState);
     };
+
+    pc.onsignalingstatechange = () =>{
+      console.log('signaling state', pc.signalingState);
+    }
     return pc;
   };
 
@@ -344,26 +363,30 @@ export const Room = ({
     };
   }, [socket]);
 
-  useEffect(()=> {
+  useEffect(() => {
     const logConnectionState = () => {
       console.log("connection state check", {
         socketConnected: socket?.connected,
         lobby,
         connectedUser,
         roomId: roomIdRef.current,
-        sendingPc: sendingPc ? {
-          connectionState : sendingPc.connectionState,
-          iceConnectionState: sendingPc.iceConnectionState
-        } : 'null',
-        receivingPc: receivingPc ? {
-          connectionState: receivingPc.connectionState,
-          iceConnectionState: receivingPc.iceConnectionState
-        } : 'null'
-      })
+        sendingPc: sendingPc
+          ? {
+              connectionState: sendingPc.connectionState,
+              iceConnectionState: sendingPc.iceConnectionState,
+            }
+          : "null",
+        receivingPc: receivingPc
+          ? {
+              connectionState: receivingPc.connectionState,
+              iceConnectionState: receivingPc.iceConnectionState,
+            }
+          : "null",
+      });
     };
     const interval = setInterval(logConnectionState, 5000);
-    return ()=> clearInterval(interval);
-  },[socket, lobby, connectedUser, sendingPc, receivingPc])
+    return () => clearInterval(interval);
+  }, [socket, lobby, connectedUser, sendingPc, receivingPc]);
 
   useEffect(() => {
     if (localVideoRef.current && localMediaTrack) {
