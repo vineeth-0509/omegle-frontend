@@ -262,6 +262,8 @@ export const Room = ({
         setConnectedUser("stranger");
 
         const pc = createPeerConnection();
+        if(localAudioTrack) pc.addTrack(localAudioTrack);
+        if(localMediaTrack) pc.addTrack(localMediaTrack)
         setReceivingPc(pc);
         console.log("userB setting remote description");
         await pc.setRemoteDescription(new RTCSessionDescription(remoteSdp));
