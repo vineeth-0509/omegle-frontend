@@ -1187,7 +1187,7 @@ export const Room = ({
 }) => {
   const [socket, setSocket] = useState<null | Socket>(null);
   const [lobby, setLobby] = useState(true);
-  const pcRef = useRef<RTCPeerConnection | null>(null); // ✅ useRef for stable reference
+  const pcRef = useRef<RTCPeerConnection | null>(null);
   const roomIdRef = useRef<string | null>(null);
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
   const localVideoRef = useRef<HTMLVideoElement>(null);
@@ -1199,45 +1199,45 @@ export const Room = ({
 
   useEffect(() => {
     if (!name) return;
+
     const sock = io(URL, { query: { name } });
     setSocket(sock);
 
     sock.on("connect", () => console.log("✅ Connected to server:", sock.id));
 
-    const setupConnectionMonitoring = (pc: RTCPeerConnection) =>{
-      pc.onconnectionstatechange = () =>{
-        console.log(`connection state:`, pc.connectionState)
+    const setupConnectionMonitoring = (pc: RTCPeerConnection) => {
+      pc.onconnectionstatechange = () => {
+        console.log(`connection state:`, pc.connectionState);
       };
-      pc.oniceconnectionstatechange = ()=>{
-        console.log('ice connection state:', pc.iceConnectionState)
-      }
-    }
+      pc.oniceconnectionstatechange = () => {
+        console.log("ice connection state:", pc.iceConnectionState);
+      };
+    };
 
-    // 🟢 Create and set up a new PeerConnection
+    // ✅ Create and set up PeerConnection properly
     const createPeerConnection = () => {
       const pc = new RTCPeerConnection({
-        iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+        iceServers: [
+          { urls: "stun:stun.l.google.com:19302" },
+          {
+            urls: "turn:relay1.expressturn.com:3478",
+            username: "ef8aK3dN2ZfODm3g",
+            credential: "SgLRq3N9ZbS4wz8J",
+          },
+        ],
       });
+
       setupConnectionMonitoring(pc);
 
+      // ✅ When remote stream arrives
       pc.ontrack = (event) => {
-        // console.log("🎥 Remote track received");
-        // if (remoteVideoRef.current && event.streams[0]) {
-        //   remoteVideoRef.current.srcObject = event.streams[0];
-        //   remoteVideoRef.current.play().catch(console.error);
-        // }
-        console.log("remote track received");
-        let remoteStream = remoteVideoRef.current?.srcObject as MediaStream | null;
-        if(!remoteStream){
-          remoteStream = new MediaStream();
-          if(remoteVideoRef.current){
-            remoteVideoRef.current.srcObject = remoteStream;
-          }
+        console.log("🎥 Remote track received");
+        if (remoteVideoRef.current && event.streams[0]) {
+          remoteVideoRef.current.srcObject = event.streams[0];
+          remoteVideoRef.current
+            .play()
+            .catch((err) => console.warn("Autoplay failed:", err));
         }
-        remoteStream.addTrack(event.track);
-        remoteVideoRef.current?.play().catch((err)=> {
-          console.error("Error playing remote video:", err)
-        })
       };
 
       pc.onicecandidate = (event) => {
@@ -1250,14 +1250,25 @@ export const Room = ({
         }
       };
 
-      if (localAudioTrack) pc.addTrack(localAudioTrack);
-      if (localMediaTrack) pc.addTrack(localMediaTrack);
+      // ✅ Attach local media tracks correctly
+      const stream = new MediaStream();
+      if (localAudioTrack) stream.addTrack(localAudioTrack);
+      if (localMediaTrack) stream.addTrack(localMediaTrack);
+      stream.getTracks().forEach((track) => pc.addTrack(track, stream));
 
       pcRef.current = pc;
       return pc;
     };
 
-    // User A: Creates offer
+    // ✅ Room ready event
+    sock.on("room-ready", ({ roomId }) => {
+      console.log("✅ Room ready:", roomId);
+      roomIdRef.current = roomId;
+      setLobby(false);
+      setConnectedUser("stranger");
+    });
+
+    // 🟢 User A: create offer
     sock.on("send-offer", async ({ roomId }) => {
       console.log("📡 UserA: Creating OFFER for room", roomId);
       roomIdRef.current = roomId;
@@ -1265,14 +1276,12 @@ export const Room = ({
       setConnectedUser("stranger");
 
       const pc = createPeerConnection();
-
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
-
       sock.emit("offer", { roomId, sdp: offer, senderSocketId: sock.id });
     });
 
-    // User B: Receives offer, creates answer
+    // 🟢 User B: receives offer, creates answer
     sock.on("offer", async ({ roomId, sdp }) => {
       console.log("📥 UserB: Received OFFER");
       roomIdRef.current = roomId;
@@ -1280,25 +1289,23 @@ export const Room = ({
       setConnectedUser("stranger");
 
       const pc = createPeerConnection();
-
       await pc.setRemoteDescription(new RTCSessionDescription(sdp));
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
 
       sock.emit("answer", { roomId, sdp: answer, senderSocketId: sock.id });
 
-      // Apply pending ICE candidates
+      // Apply pending ICE
       pendingCandidates.current.forEach((c) => pc.addIceCandidate(c));
       pendingCandidates.current = [];
     });
 
-    // User A: Receives answer
+    // 🟢 User A: receives answer
     sock.on("answer", async ({ sdp }) => {
       console.log("📥 UserA: Received ANSWER");
       const pc = pcRef.current;
       if (pc) {
         await pc.setRemoteDescription(new RTCSessionDescription(sdp));
-        // Apply pending ICE candidates
         pendingCandidates.current.forEach((c) => pc.addIceCandidate(c));
         pendingCandidates.current = [];
       }
@@ -1333,7 +1340,7 @@ export const Room = ({
     };
   }, [name, localAudioTrack, localMediaTrack]);
 
-  // Show local video
+  // ✅ Local video display
   useEffect(() => {
     if (localVideoRef.current && localMediaTrack) {
       const stream = new MediaStream([localMediaTrack]);
@@ -1360,7 +1367,6 @@ export const Room = ({
 
   const sendMessage = () => {
     if (!roomIdRef.current || !socket || !input.trim()) return;
-
     socket.emit("chat-message", {
       roomId: roomIdRef.current,
       message: input,
@@ -1397,7 +1403,7 @@ export const Room = ({
         </div>
 
         <div className="rounded-2xl overflow-hidden border-2 border-blue-500/30 bg-black relative">
-          <video ref={remoteVideoRef} autoPlay playsInline muted={false} controls={true} className="w-full aspect-video object-cover bg-gray-900" />
+          <video ref={remoteVideoRef} autoPlay playsInline className="w-full aspect-video object-cover bg-gray-900" />
           <div className="absolute bottom-4 left-4 px-3 py-1 bg-black/70 rounded-full text-sm">
             {connectedUser ? "Stranger" : "Waiting..."}
           </div>
@@ -1412,7 +1418,7 @@ export const Room = ({
         </div>
       </div>
 
-      {/* Chat UI */}
+      {/* Chat */}
       <div className="max-w-7xl mx-auto">
         {!lobby && (
           <div className="grid lg:grid-cols-3 gap-6">
@@ -1424,43 +1430,6 @@ export const Room = ({
                 <SkipForward className="w-5 h-5" />
                 Next
               </Button>
-               <Button
-          onClick={() => {
-            const video = remoteVideoRef.current;
-            const stream = video?.srcObject as MediaStream;
-            console.log("🎬 VIDEO DEBUG:", {
-              hasVideoElement: !!video,
-              hasStream: !!stream,
-              videoTracks: stream?.getVideoTracks() || [],
-              audioTracks: stream?.getAudioTracks() || [],
-              videoWidth: video?.videoWidth,
-              videoHeight: video?.videoHeight,
-              readyState: video?.readyState,
-              paused: video?.paused
-            });
-            
-            // Check if we have video tracks with content
-            const videoTracks = stream?.getVideoTracks() || [];
-            videoTracks.forEach((track, i) => {
-              console.log(`📹 Video Track ${i}:`, {
-                kind: track.kind,
-                readyState: track.readyState,
-                muted: track.muted,
-                enabled: track.enabled
-              });
-            });
-            
-            // Force play attempt
-            if (video && stream) {
-              video.play()
-                .then(() => console.log("✅ Video play successful"))
-                .catch(e => console.log("❌ Video play failed:", e.message));
-            }
-          }}
-          className="bg-green-600 hover:bg-green-700 text-white rounded-xl py-6 font-semibold"
-        >
-          Debug Video
-        </Button>
             </div>
 
             <div className="lg:col-span-2 rounded-2xl border-2 border-purple-500/30 bg-white/5 flex flex-col h-96">
