@@ -1424,6 +1424,43 @@ export const Room = ({
                 <SkipForward className="w-5 h-5" />
                 Next
               </Button>
+               <Button
+          onClick={() => {
+            const video = remoteVideoRef.current;
+            const stream = video?.srcObject as MediaStream;
+            console.log("🎬 VIDEO DEBUG:", {
+              hasVideoElement: !!video,
+              hasStream: !!stream,
+              videoTracks: stream?.getVideoTracks() || [],
+              audioTracks: stream?.getAudioTracks() || [],
+              videoWidth: video?.videoWidth,
+              videoHeight: video?.videoHeight,
+              readyState: video?.readyState,
+              paused: video?.paused
+            });
+            
+            // Check if we have video tracks with content
+            const videoTracks = stream?.getVideoTracks() || [];
+            videoTracks.forEach((track, i) => {
+              console.log(`📹 Video Track ${i}:`, {
+                kind: track.kind,
+                readyState: track.readyState,
+                muted: track.muted,
+                enabled: track.enabled
+              });
+            });
+            
+            // Force play attempt
+            if (video && stream) {
+              video.play()
+                .then(() => console.log("✅ Video play successful"))
+                .catch(e => console.log("❌ Video play failed:", e.message));
+            }
+          }}
+          className="bg-green-600 hover:bg-green-700 text-white rounded-xl py-6 font-semibold"
+        >
+          Debug Video
+        </Button>
             </div>
 
             <div className="lg:col-span-2 rounded-2xl border-2 border-purple-500/30 bg-white/5 flex flex-col h-96">
