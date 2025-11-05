@@ -1187,10 +1187,11 @@ export const Room = ({
 }) => {
   const [socket, setSocket] = useState<null | Socket>(null);
   const [lobby, setLobby] = useState(true);
-  const [pc, setPc] = useState<RTCPeerConnection | null>(null);
+  const pcRef = useRef<RTCPeerConnection | null>(null); // ✅ useRef for stable reference
   const roomIdRef = useRef<string | null>(null);
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
   const localVideoRef = useRef<HTMLVideoElement>(null);
+  const pendingCandidates = useRef<RTCIceCandidateInit[]>([]);
   const [messages, setMessages] = useState<{ text: string; self: boolean }[]>([]);
   const [input, setInput] = useState("");
   const [connectedUser, setConnectedUser] = useState<string | null>(null);
@@ -1198,11 +1199,51 @@ export const Room = ({
 
   useEffect(() => {
     if (!name) return;
-    
     const sock = io(URL, { query: { name } });
     setSocket(sock);
 
     sock.on("connect", () => console.log("✅ Connected to server:", sock.id));
+
+    const setupConnectionMonitoring = (pc: RTCPeerConnection) =>{
+      pc.onconnectionstatechange = () =>{
+        console.log(`connection state:`, pc.connectionState)
+      };
+      pc.oniceconnectionstatechange = ()=>{
+        console.log('ice connection state:', pc.iceConnectionState)
+      }
+    }
+
+    // 🟢 Create and set up a new PeerConnection
+    const createPeerConnection = () => {
+      const pc = new RTCPeerConnection({
+        iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+      });
+      setupConnectionMonitoring(pc);
+
+      pc.ontrack = (event) => {
+        console.log("🎥 Remote track received");
+        if (remoteVideoRef.current && event.streams[0]) {
+          remoteVideoRef.current.srcObject = event.streams[0];
+          remoteVideoRef.current.play().catch(console.error);
+        }
+      };
+
+      pc.onicecandidate = (event) => {
+        if (event.candidate && roomIdRef.current && sock) {
+          sock.emit("add-ice-candidate", {
+            candidate: event.candidate,
+            roomId: roomIdRef.current,
+            senderSocketId: sock.id,
+          });
+        }
+      };
+
+      if (localAudioTrack) pc.addTrack(localAudioTrack);
+      if (localMediaTrack) pc.addTrack(localMediaTrack);
+
+      pcRef.current = pc;
+      return pc;
+    };
 
     // User A: Creates offer
     sock.on("send-offer", async ({ roomId }) => {
@@ -1211,38 +1252,11 @@ export const Room = ({
       setLobby(false);
       setConnectedUser("stranger");
 
-      const newPc = new RTCPeerConnection({
-        iceServers: [{ urls: "stun:stun.l.google.com:19302" }]
-      });
+      const pc = createPeerConnection();
 
-      setPc(newPc);
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
 
-      // Add local tracks
-      if (localAudioTrack) newPc.addTrack(localAudioTrack);
-      if (localMediaTrack) newPc.addTrack(localMediaTrack);
-
-      // Handle remote tracks
-      newPc.ontrack = (event) => {
-        console.log("🎥 REMOTE TRACK RECEIVED");
-        if (remoteVideoRef.current && event.streams[0]) {
-          remoteVideoRef.current.srcObject = event.streams[0];
-          remoteVideoRef.current.play().catch(console.error);
-        }
-      };
-
-      // Handle ICE candidates
-      newPc.onicecandidate = (event) => {
-        if (event.candidate) {
-          sock.emit("add-ice-candidate", {
-            candidate: event.candidate,
-            roomId,
-            senderSocketId: sock.id,
-          });
-        }
-      };
-
-      const offer = await newPc.createOffer();
-      await newPc.setLocalDescription(offer);
       sock.emit("offer", { roomId, sdp: offer, senderSocketId: sock.id });
     });
 
@@ -1253,55 +1267,38 @@ export const Room = ({
       setLobby(false);
       setConnectedUser("stranger");
 
-      const newPc = new RTCPeerConnection({
-        iceServers: [{ urls: "stun:stun.l.google.com:19302" }]
-      });
+      const pc = createPeerConnection();
 
-      setPc(newPc);
+      await pc.setRemoteDescription(new RTCSessionDescription(sdp));
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
 
-      // Add local tracks
-      if (localAudioTrack) newPc.addTrack(localAudioTrack);
-      if (localMediaTrack) newPc.addTrack(localMediaTrack);
-
-      // Handle remote tracks
-      newPc.ontrack = (event) => {
-        console.log("🎥 REMOTE TRACK RECEIVED");
-        if (remoteVideoRef.current && event.streams[0]) {
-          remoteVideoRef.current.srcObject = event.streams[0];
-          remoteVideoRef.current.play().catch(console.error);
-        }
-      };
-
-      // Handle ICE candidates
-      newPc.onicecandidate = (event) => {
-        if (event.candidate) {
-          sock.emit("add-ice-candidate", {
-            candidate: event.candidate,
-            roomId,
-            senderSocketId: sock.id,
-          });
-        }
-      };
-
-      await newPc.setRemoteDescription(sdp);
-      const answer = await newPc.createAnswer();
-      await newPc.setLocalDescription(answer);
       sock.emit("answer", { roomId, sdp: answer, senderSocketId: sock.id });
+
+      // Apply pending ICE candidates
+      pendingCandidates.current.forEach((c) => pc.addIceCandidate(c));
+      pendingCandidates.current = [];
     });
 
     // User A: Receives answer
     sock.on("answer", async ({ sdp }) => {
       console.log("📥 UserA: Received ANSWER");
+      const pc = pcRef.current;
       if (pc) {
-        await pc.setRemoteDescription(sdp);
+        await pc.setRemoteDescription(new RTCSessionDescription(sdp));
+        // Apply pending ICE candidates
+        pendingCandidates.current.forEach((c) => pc.addIceCandidate(c));
+        pendingCandidates.current = [];
       }
     });
 
     // Handle ICE candidates
-    sock.on("add-ice-candidate", async ({ candidate, senderSocketId }) => {
-      console.log("🧊 Processing ICE candidate");
-      if (pc) {
-        await pc.addIceCandidate(candidate).catch(console.error);
+    sock.on("add-ice-candidate", async ({ candidate }) => {
+      const pc = pcRef.current;
+      if (pc && pc.remoteDescription) {
+        await pc.addIceCandidate(new RTCIceCandidate(candidate)).catch(console.error);
+      } else {
+        pendingCandidates.current.push(candidate);
       }
     });
 
@@ -1314,21 +1311,17 @@ export const Room = ({
       console.log("🚪 Stranger disconnected");
       setLobby(true);
       setConnectedUser(null);
-      if (pc) pc.close();
-      setPc(null);
-    });
-
-    sock.on("room-ready", ({ roomId }) => {
-      roomIdRef.current = roomId;
+      pcRef.current?.close();
+      pcRef.current = null;
     });
 
     return () => {
       sock.disconnect();
-      if (pc) pc.close();
+      pcRef.current?.close();
     };
   }, [name, localAudioTrack, localMediaTrack]);
 
-  // Set up local video
+  // Show local video
   useEffect(() => {
     if (localVideoRef.current && localMediaTrack) {
       const stream = new MediaStream([localMediaTrack]);
@@ -1343,19 +1336,19 @@ export const Room = ({
     }
     setLobby(true);
     setConnectedUser(null);
-    if (pc) pc.close();
-    setPc(null);
+    pcRef.current?.close();
+    pcRef.current = null;
   };
 
   const handleLeave = () => {
-    if (pc) pc.close();
+    pcRef.current?.close();
     socket?.disconnect();
     navigate("/");
   };
 
   const sendMessage = () => {
     if (!roomIdRef.current || !socket || !input.trim()) return;
-    
+
     socket.emit("chat-message", {
       roomId: roomIdRef.current,
       message: input,
@@ -1387,27 +1380,15 @@ export const Room = ({
 
       <div className="grid lg:grid-cols-2 gap-6 mb-6 max-w-7xl mx-auto">
         <div className="rounded-2xl overflow-hidden border-2 border-purple-500/30 bg-black relative">
-          <video 
-            ref={localVideoRef} 
-            autoPlay 
-            muted 
-            playsInline
-            className="w-full aspect-video object-cover" 
-          />
+          <video ref={localVideoRef} autoPlay muted playsInline className="w-full aspect-video object-cover" />
           <div className="absolute bottom-4 left-4 px-3 py-1 bg-black/70 rounded-full text-sm">You</div>
         </div>
 
         <div className="rounded-2xl overflow-hidden border-2 border-blue-500/30 bg-black relative">
-          <video 
-            ref={remoteVideoRef} 
-            autoPlay 
-            playsInline
-            className="w-full aspect-video object-cover bg-gray-900"
-          />
+          <video ref={remoteVideoRef} autoPlay playsInline className="w-full aspect-video object-cover bg-gray-900" />
           <div className="absolute bottom-4 left-4 px-3 py-1 bg-black/70 rounded-full text-sm">
             {connectedUser ? "Stranger" : "Waiting..."}
           </div>
-
           {lobby && (
             <div className="absolute inset-0 flex items-center justify-center bg-black/50">
               <div className="text-center">
@@ -1419,6 +1400,7 @@ export const Room = ({
         </div>
       </div>
 
+      {/* Chat UI */}
       <div className="max-w-7xl mx-auto">
         {!lobby && (
           <div className="grid lg:grid-cols-3 gap-6">
@@ -1435,9 +1417,7 @@ export const Room = ({
             <div className="lg:col-span-2 rounded-2xl border-2 border-purple-500/30 bg-white/5 flex flex-col h-96">
               <div className="flex-1 overflow-y-auto p-4 space-y-3">
                 {messages.length === 0 ? (
-                  <div className="text-center text-gray-500 mt-8">
-                    Start a conversation...
-                  </div>
+                  <div className="text-center text-gray-500 mt-8">Start a conversation...</div>
                 ) : (
                   messages.map((msg, i) => (
                     <div
