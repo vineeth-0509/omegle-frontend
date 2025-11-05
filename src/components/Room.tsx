@@ -43,7 +43,7 @@ export const Room = ({
         { urls: "stun:stun4.l.google.com:19302" },
 
         {
-          urls: "turn:openralay.metered.ca:80",
+          urls: "turn:openrelay.metered.ca:80",
           username: "openrelayproject",
           credential: "openrelayproject",
         },
@@ -53,7 +53,7 @@ export const Room = ({
           credential: "openrelayproject",
         },
         {
-          urls: "turn:openrelay.metered.ca:443?transaport=tcp",
+          urls: "turn:openrelay.metered.ca:443?transport=tcp", // FIXED: transport not transaport
           username: "openrelayproject",
           credential: "openrelayproject",
         },
@@ -228,7 +228,7 @@ export const Room = ({
           sdp: pc.localDescription,
           senderSocketId: socket.id,
         });
-        console.log("offer sent to server")
+        console.log("offer sent to server");
       } catch (error) {
         console.log("Error in sending offer:", error);
       }
@@ -267,7 +267,9 @@ export const Room = ({
       console.log("receiving answer for room: ", roomId);
       if (sendingPc) {
         try {
-          await sendingPc.setRemoteDescription(new RTCSessionDescription(remoteSdp));
+          await sendingPc.setRemoteDescription(
+            new RTCSessionDescription(remoteSdp)
+          );
           console.log("Remote description set on sending pc");
         } catch (error) {
           console.error("Error setting remote descripiton:", error);
@@ -283,11 +285,11 @@ export const Room = ({
         const iceCandidate = new RTCIceCandidate(candidate);
         if (sendingPc) {
           await sendingPc.addIceCandidate(iceCandidate);
-          console.log('ice candidate added to sending pc')
+          console.log("ice candidate added to sending pc");
         }
         if (receivingPc) {
           await receivingPc.addIceCandidate(iceCandidate);
-          console.log('ice candidate added to the receiving pc')
+          console.log("ice candidate added to the receiving pc");
         }
       } catch (error) {
         console.error("Error adding ICE candidate:", error);
@@ -306,7 +308,10 @@ export const Room = ({
 
     socket.on("user-disconnected", () => {
       alert("stranger disconnected");
-      setMessages(prev => [...prev, {text:"Stranger disconnected", self: false}])
+      setMessages((prev) => [
+        ...prev,
+        { text: "Stranger disconnected", self: false },
+      ]);
       cleanupConnection();
       setLobby(true);
     });
@@ -338,6 +343,27 @@ export const Room = ({
       socket?.off("receive-message", handleReceiveMessage);
     };
   }, [socket]);
+
+  useEffect(()=> {
+    const logConnectionState = () => {
+      console.log("connection state check", {
+        socketConnected: socket?.connected,
+        lobby,
+        connectedUser,
+        roomId: roomIdRef.current,
+        sendingPc: sendingPc ? {
+          connectionState : sendingPc.connectionState,
+          iceConnectionState: sendingPc.iceConnectionState
+        } : 'null',
+        receivingPc: receivingPc ? {
+          connectionState: receivingPc.connectionState,
+          iceConnectionState: receivingPc.iceConnectionState
+        } : 'null'
+      })
+    };
+    const interval = setInterval(logConnectionState, 5000);
+    return ()=> clearInterval(interval);
+  },[socket, lobby, connectedUser, sendingPc, receivingPc])
 
   useEffect(() => {
     if (localVideoRef.current && localMediaTrack) {
