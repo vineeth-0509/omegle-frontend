@@ -1221,11 +1221,23 @@ export const Room = ({
       setupConnectionMonitoring(pc);
 
       pc.ontrack = (event) => {
-        console.log("🎥 Remote track received");
-        if (remoteVideoRef.current && event.streams[0]) {
-          remoteVideoRef.current.srcObject = event.streams[0];
-          remoteVideoRef.current.play().catch(console.error);
+        // console.log("🎥 Remote track received");
+        // if (remoteVideoRef.current && event.streams[0]) {
+        //   remoteVideoRef.current.srcObject = event.streams[0];
+        //   remoteVideoRef.current.play().catch(console.error);
+        // }
+        console.log("remote track received");
+        let remoteStream = remoteVideoRef.current?.srcObject as MediaStream | null;
+        if(!remoteStream){
+          remoteStream = new MediaStream();
+          if(remoteVideoRef.current){
+            remoteVideoRef.current.srcObject = remoteStream;
+          }
         }
+        remoteStream.addTrack(event.track);
+        remoteVideoRef.current?.play().catch((err)=> {
+          console.error("Error playing remote video:", err)
+        })
       };
 
       pc.onicecandidate = (event) => {
@@ -1385,7 +1397,7 @@ export const Room = ({
         </div>
 
         <div className="rounded-2xl overflow-hidden border-2 border-blue-500/30 bg-black relative">
-          <video ref={remoteVideoRef} autoPlay playsInline className="w-full aspect-video object-cover bg-gray-900" />
+          <video ref={remoteVideoRef} autoPlay playsInline muted={false} controls={true} className="w-full aspect-video object-cover bg-gray-900" />
           <div className="absolute bottom-4 left-4 px-3 py-1 bg-black/70 rounded-full text-sm">
             {connectedUser ? "Stranger" : "Waiting..."}
           </div>
