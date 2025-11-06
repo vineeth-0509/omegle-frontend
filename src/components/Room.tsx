@@ -1538,11 +1538,23 @@ export const Room = ({
 
       // ✅ SET UP HANDLERS FIRST (BEFORE adding tracks or creating offer)
       newPc.ontrack = (event) => {
-        console.log("🎥 UserA: REMOTE TRACK RECEIVED", event.streams[0]);
+        console.log("🎥 UserA: REMOTE TRACK RECEIVED");
         console.log("Track kind:", event.track.kind);
-        console.log("Stream tracks:", event.streams[0].getTracks());
-        if (remoteVideoRef.current && event.streams[0]) {
-          remoteVideoRef.current.srcObject = event.streams[0];
+        console.log("Streams:", event.streams);
+        
+        if (remoteVideoRef.current) {
+          // Get existing stream or create new one
+          let stream = remoteVideoRef.current.srcObject as MediaStream;
+          
+          if (!stream) {
+            stream = new MediaStream();
+            remoteVideoRef.current.srcObject = stream;
+          }
+          
+          // Add the track to the stream
+          stream.addTrack(event.track);
+          console.log("✅ Added track to remote video, total tracks:", stream.getTracks().length);
+          
           remoteVideoRef.current.play().catch((err) => {
             console.error("Error playing remote video:", err);
           });
