@@ -1479,7 +1479,6 @@ export const Room = ({
 };
 
 */
-
 import { useEffect, useRef, useState } from "react";
 import { io, type Socket } from "socket.io-client";
 import { Button } from "@/components/ui/button";
@@ -1501,7 +1500,7 @@ export const Room = ({
 }) => {
   const [socket, setSocket] = useState<null | Socket>(null);
   const [lobby, setLobby] = useState(true);
-  const [pc, setPc] = useState<RTCPeerConnection | null>(null);
+  const pcRef = useRef<RTCPeerConnection | null>(null);
   const roomIdRef = useRef<string | null>(null);
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
   const localVideoRef = useRef<HTMLVideoElement>(null);
@@ -1535,12 +1534,18 @@ export const Room = ({
         ]
       });
 
+      pcRef.current = newPc;
+
       // ✅ SET UP HANDLERS FIRST (BEFORE adding tracks or creating offer)
       newPc.ontrack = (event) => {
         console.log("🎥 UserA: REMOTE TRACK RECEIVED", event.streams[0]);
+        console.log("Track kind:", event.track.kind);
+        console.log("Stream tracks:", event.streams[0].getTracks());
         if (remoteVideoRef.current && event.streams[0]) {
           remoteVideoRef.current.srcObject = event.streams[0];
-          remoteVideoRef.current.play().catch(console.error);
+          remoteVideoRef.current.play().catch((err) => {
+            console.error("Error playing remote video:", err);
+          });
         }
       };
 
@@ -1559,17 +1564,19 @@ export const Room = ({
         console.log("🔌 UserA: ICE Connection State:", newPc.iceConnectionState);
       };
 
+      newPc.onconnectionstatechange = () => {
+        console.log("🔗 UserA: Connection State:", newPc.connectionState);
+      };
+
       // ✅ NOW add tracks
-      if (localAudioTrack) {
-        newPc.addTrack(localAudioTrack);
-        console.log("🎤 UserA: Added audio track");
-      }
       if (localMediaTrack) {
         newPc.addTrack(localMediaTrack);
         console.log("📹 UserA: Added video track");
       }
-
-      setPc(newPc);
+      if (localAudioTrack) {
+        newPc.addTrack(localAudioTrack);
+        console.log("🎤 UserA: Added audio track");
+      }
 
       const offer = await newPc.createOffer();
       await newPc.setLocalDescription(offer);
@@ -1591,12 +1598,18 @@ export const Room = ({
         ]
       });
 
+      pcRef.current = newPc;
+
       // ✅ SET UP HANDLERS FIRST
       newPc.ontrack = (event) => {
         console.log("🎥 UserB: REMOTE TRACK RECEIVED", event.streams[0]);
+        console.log("Track kind:", event.track.kind);
+        console.log("Stream tracks:", event.streams[0].getTracks());
         if (remoteVideoRef.current && event.streams[0]) {
           remoteVideoRef.current.srcObject = event.streams[0];
-          remoteVideoRef.current.play().catch(console.error);
+          remoteVideoRef.current.play().catch((err) => {
+            console.error("Error playing remote video:", err);
+          });
         }
       };
 
@@ -1615,17 +1628,19 @@ export const Room = ({
         console.log("🔌 UserB: ICE Connection State:", newPc.iceConnectionState);
       };
 
+      newPc.onconnectionstatechange = () => {
+        console.log("🔗 UserB: Connection State:", newPc.connectionState);
+      };
+
       // ✅ NOW add tracks
-      if (localAudioTrack) {
-        newPc.addTrack(localAudioTrack);
-        console.log("🎤 UserB: Added audio track");
-      }
       if (localMediaTrack) {
         newPc.addTrack(localMediaTrack);
         console.log("📹 UserB: Added video track");
       }
-
-      setPc(newPc);
+      if (localAudioTrack) {
+        newPc.addTrack(localAudioTrack);
+        console.log("🎤 UserB: Added audio track");
+      }
 
       // ✅ Set remote description FIRST
       await newPc.setRemoteDescription(sdp);
@@ -1634,6 +1649,7 @@ export const Room = ({
       // ✅ Process any pending ICE candidates
       for (const candidate of pendingIceCandidates.current) {
         await newPc.addIceCandidate(candidate).catch(console.error);
+        console.log("✅ UserB: Added pending ICE candidate");
       }
       pendingIceCandidates.current = [];
 
@@ -1646,6 +1662,7 @@ export const Room = ({
     // User A: Receives answer
     sock.on("answer", async ({ sdp }) => {
       console.log("📥 UserA: Received ANSWER");
+      const pc = pcRef.current;
       if (pc) {
         await pc.setRemoteDescription(sdp);
         console.log("✅ UserA: Set remote description from answer");
@@ -1653,22 +1670,26 @@ export const Room = ({
         // ✅ Process any pending ICE candidates
         for (const candidate of pendingIceCandidates.current) {
           await pc.addIceCandidate(candidate).catch(console.error);
+          console.log("✅ UserA: Added pending ICE candidate");
         }
         pendingIceCandidates.current = [];
       }
     });
 
-    // Handle ICE candidates
+    // Handle ICE candidates - CRITICAL FIX: Use pcRef instead of pc state
     sock.on("add-ice-candidate", async ({ candidate, senderSocketId }) => {
       console.log("🧊 Received ICE candidate from", senderSocketId);
+      const pc = pcRef.current;
       
       if (pc && pc.remoteDescription) {
         // Remote description is set, safe to add candidate
-        await pc.addIceCandidate(candidate).catch(console.error);
+        await pc.addIceCandidate(candidate).catch((err) => {
+          console.error("Error adding ICE candidate:", err);
+        });
         console.log("✅ ICE candidate added");
       } else {
         // Remote description not set yet, store for later
-        console.log("⏳ Storing ICE candidate for later");
+        console.log("⏳ Storing ICE candidate for later (remoteDescription not set)");
         pendingIceCandidates.current.push(candidate);
       }
     });
@@ -1683,8 +1704,10 @@ export const Room = ({
       setLobby(true);
       setConnectedUser(null);
       setMessages([]);
-      if (pc) pc.close();
-      setPc(null);
+      if (pcRef.current) {
+        pcRef.current.close();
+        pcRef.current = null;
+      }
       pendingIceCandidates.current = [];
     });
 
@@ -1695,7 +1718,10 @@ export const Room = ({
 
     return () => {
       sock.disconnect();
-      if (pc) pc.close();
+      if (pcRef.current) {
+        pcRef.current.close();
+        pcRef.current = null;
+      }
     };
   }, [name, localAudioTrack, localMediaTrack]);
 
@@ -1718,13 +1744,18 @@ export const Room = ({
     setLobby(true);
     setConnectedUser(null);
     setMessages([]);
-    if (pc) pc.close();
-    setPc(null);
+    if (pcRef.current) {
+      pcRef.current.close();
+      pcRef.current = null;
+    }
     pendingIceCandidates.current = [];
   };
 
   const handleLeave = () => {
-    if (pc) pc.close();
+    if (pcRef.current) {
+      pcRef.current.close();
+      pcRef.current = null;
+    }
     socket?.disconnect();
     navigate("/");
   };
